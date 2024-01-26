@@ -1,5 +1,6 @@
 https://www.kaggle.com/code/gpreda/credit-card-fraud-detection-predictive-models/notebook
 
+
 ### Context
 
 ### It is important that credit card companies are able to recognize
@@ -61,7 +62,7 @@ init_notebook_mode(connected=True)
 import gc
 from datetime import datetime 
 from sklearn.model_selection import train_test_split
-from sklearn.model_selection import KFold
+from sklearn.model_selection import KFold, StratifiedKFold
 from sklearn.metrics import roc_auc_score
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.ensemble import AdaBoostClassifier
@@ -73,12 +74,15 @@ import xgboost as xgb
 import os
 from sklearn.preprocessing import RobustScaler
 from imblearn.over_sampling import ADASYN
+from skopt import BayesSearchCV
+from skopt.callbacks import DeadlineStopper, DeltaYStopper
+from skopt.space import Real, Categorical, Integer
+
 
 pd.set_option('display.max_columns', 100)
 
 
-#CROSS-VALIDATION
-NUMBER_KFOLDS = 5 #number of KFolds for cross-validation
+
 
 
 MAX_ROUNDS = 1000 #lgb iterations
@@ -331,9 +335,10 @@ plt.show();
 
 target = 'Class'
 
+
 # Split data in train, test and validation set
 
-#TRAIN/VALIDATION/TEST SPLIT
+#TRAIN/VALIDATION/TEST SPLIT (stratified)
 #VALIDATION
 VALID_SIZE = 0.20 # simple validation using train_test_split
 TEST_SIZE = 0.20 # test size using_train_test_split
@@ -342,8 +347,12 @@ RANDOM_STATE = 333
 X = data_df.drop([target, 'Hour'],axis = 1)
 Y = data_df[target]
 
-X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=TEST_SIZE, random_state=RANDOM_STATE, shuffle=True )
-X_train, X_valid, Y_train, Y_valid = train_test_split(X_train, Y_train, test_size=VALID_SIZE, random_state=RANDOM_STATE, shuffle=True )
+X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=TEST_SIZE, stratify=Y, random_state=RANDOM_STATE, shuffle=True )
+X_train, X_valid, Y_train, Y_valid = train_test_split(X_train, Y_train, test_size=VALID_SIZE, stratify=Y_train, random_state=RANDOM_STATE, shuffle=True )
+
+
+
+# scaling
 
 # on scaling, What’s best for the credit card dataset:
 # Max-min Normalization features will have a small Standard deviation
@@ -374,7 +383,13 @@ rob_scaler_amount.fit(X_train['Amount'].values.reshape(-1,1))
 rob_scaler_time.fit(X_train['Time'].values.reshape(-1,1))
 X_train['Time'] = rob_scaler_amount.transform(X_train['Amount'].values.reshape(-1,1))
 X_train['Amount'] = rob_scaler_time.transform(X_train['Time'].values.reshape(-1,1))
+X_valid['Time'] = rob_scaler_amount.transform(X_valid['Amount'].values.reshape(-1,1))
+X_valid['Amount'] = rob_scaler_time.transform(X_valid['Time'].values.reshape(-1,1))
+X_test['Time'] = rob_scaler_amount.transform(X_test['Amount'].values.reshape(-1,1))
+X_test['Amount'] = rob_scaler_time.transform(X_test['Time'].values.reshape(-1,1))
 X_train.head()
+X_valid.head()
+X_test.head()
 
 
 # class imbalance - oversampling
@@ -390,8 +405,9 @@ Y_train.value_counts()/Y_train.value_counts().sum()
 # ADASYN instead of other techniques like
 # SMOTE to balance the highly imbalance training data.
 
-X_train, Y_train = ADASYN().fit_resample(X_train, Y_train)
+X_train, Y_train = ADASYN(random_state=RANDOM_STATE).fit_resample(X_train, Y_train)
 Y_train.value_counts()
+
 
 # modelling
 
@@ -435,7 +451,7 @@ s = sns.barplot(x='Feature',y='Feature importance',data=tmp)
 s.set_xticklabels(s.get_xticklabels(),rotation=90)
 plt.show() 
 
-# The most important features are V4, V14, V17, V12, V10, V8.
+# The most important features are V4, V14, V12, V17, V18, V10.
 
 # confusion matrix
 
@@ -467,4 +483,314 @@ plt.show()
 roc_auc_score(Y_valid.values, preds)
 
 
-# The ROC-AUC score obtained with RandomForrestClassifier is 0.89.
+# The ROC-AUC score obtained with RandomForestClassifier is 0.87.
+
+
+
+# AdaBoostClassifier
+
+clf = AdaBoostClassifier(random_state=RANDOM_STATE,
+                         algorithm='SAMME.R',
+                         learning_rate=0.8,
+                             n_estimators=NUM_ESTIMATORS)
+
+clf.fit(X_train, Y_train.values)
+
+preds = clf.predict(X_valid)
+
+# feature importance
+
+tmp = pd.DataFrame({'Feature': X_train.columns.to_numpy(), 'Feature importance': clf.feature_importances_})
+tmp = tmp.sort_values(by='Feature importance',ascending=False)
+plt.figure(figsize = (7,4))
+plt.title('Features importance',fontsize=14)
+s = sns.barplot(x='Feature',y='Feature importance',data=tmp)
+s.set_xticklabels(s.get_xticklabels(),rotation=90)
+plt.show()   
+
+# confusion matrix
+cm = pd.crosstab(Y_valid.values, preds, rownames=['Actual'], colnames=['Predicted'])
+fig, (ax1) = plt.subplots(ncols=1, figsize=(5,5))
+sns.heatmap(cm, 
+            xticklabels=['Not Fraud', 'Fraud'],
+            yticklabels=['Not Fraud', 'Fraud'],
+            annot=True,ax=ax1,
+            linewidths=.2,linecolor="Darkblue", cmap="Blues")
+plt.title('Confusion Matrix', fontsize=14)
+plt.show()
+
+# auc-roc
+
+roc_auc_score(Y_valid.values, preds)
+
+# The ROC-AUC score obtained with AdaBoostClassifier is 0.91.
+
+
+# CatBoostClassifier
+
+clf = CatBoostClassifier(iterations=500,
+                             learning_rate=0.02,
+                             depth=12,
+                             eval_metric='AUC',
+                             random_seed = RANDOM_STATE,
+                             bagging_temperature = 0.2,
+                             od_type='Iter',
+                             metric_period = VERBOSE_EVAL,
+                             od_wait=100)
+
+clf.fit(X_train, Y_train.values, eval_set=[(X_train, Y_train), (X_valid, Y_valid)])
+
+preds = clf.predict(X_test)
+
+# feature importance
+
+tmp = pd.DataFrame({'Feature': X_train.columns.to_numpy(), 'Feature importance': clf.feature_importances_})
+tmp = tmp.sort_values(by='Feature importance',ascending=False)
+plt.figure(figsize = (7,4))
+plt.title('Features importance',fontsize=14)
+s = sns.barplot(x='Feature',y='Feature importance',data=tmp)
+s.set_xticklabels(s.get_xticklabels(),rotation=90)
+plt.show()   
+
+# confusion matrix
+cm = pd.crosstab(Y_test.values, preds, rownames=['Actual'], colnames=['Predicted'])
+fig, (ax1) = plt.subplots(ncols=1, figsize=(5,5))
+sns.heatmap(cm, 
+            xticklabels=['Not Fraud', 'Fraud'],
+            yticklabels=['Not Fraud', 'Fraud'],
+            annot=True,ax=ax1,
+            linewidths=.2,linecolor="Darkblue", cmap="Blues")
+plt.title('Confusion Matrix', fontsize=14)
+plt.show()
+
+# auc-roc
+
+roc_auc_score(Y_test.values, preds)
+
+# The ROC-AUC score obtained with CatBoostClassifier is 0.92.
+
+
+# XGBoost
+
+# Prepare the train and valid datasets
+dtrain = xgb.DMatrix(X_train, Y_train.values)
+dvalid = xgb.DMatrix(X_valid, Y_valid.values)
+dtest = xgb.DMatrix(X_test, Y_test.values)
+
+#What to monitor (in this case, **train** and **valid**)
+watchlist = [(dtrain, 'train'), (dvalid, 'valid')]
+
+# Set xgboost parameters
+params = {}
+params['objective'] = 'binary:logistic'
+params['eta'] = 0.01
+params['silent'] = True
+params['max_depth'] = 2
+params['subsample'] = 0.8
+params['colsample_bytree'] = 0.9
+params['eval_metric'] = 'auc'
+params['random_state'] = RANDOM_STATE
+
+model = xgb.train(params, 
+                dtrain, 
+                MAX_ROUNDS, 
+                watchlist, 
+                early_stopping_rounds=EARLY_STOP, 
+                maximize=True, 
+                verbose_eval=VERBOSE_EVAL)
+
+fig, (ax) = plt.subplots(ncols=1, figsize=(8,5))
+xgb.plot_importance(model, height=0.8, title="Features importance (XGBoost)", ax=ax, color="green") 
+plt.show()
+
+preds = model.predict(dtest)
+preds = [round(value) for value in preds]
+
+cm = pd.crosstab(Y_test.values, preds, rownames=['Actual'], colnames=['Predicted'])
+fig, (ax1) = plt.subplots(ncols=1, figsize=(5,5))
+sns.heatmap(cm, 
+            xticklabels=['Not Fraud', 'Fraud'],
+            yticklabels=['Not Fraud', 'Fraud'],
+            annot=True,ax=ax1,
+            linewidths=.2,linecolor="Darkblue", cmap="Blues")
+plt.title('Confusion Matrix', fontsize=14)
+plt.show()
+
+roc_auc_score(Y_test.values, preds)
+
+# The AUC score for the prediction of fresh data (test set) for xgboost is 0.92.
+
+
+# LightGBM
+
+
+lgbm = LGBMClassifier(boosting_type= 'gbdt',
+          objective= 'binary',
+          metric='auc',
+          learning_rate= 0.01,
+          num_leaves= 7,  # we should let it be smaller than 2^(max_depth)
+          max_depth= 4,  # -1 means no limit
+          min_child_samples= 100,  # Minimum number of data need in a child(min_data_in_leaf)
+          max_bin= 100,  # Number of bucketed bin for feature values
+          subsample= 0.9,  # Subsample ratio of the training instance.
+          subsample_freq= 1,  # frequence of subsample, <=0 means no enable
+          colsample_bytree= 0.7,  # Subsample ratio of columns when constructing each tree.
+          min_child_weight= 0,  # Minimum sum of instance weight(hessian) needed in a child(leaf)
+          min_split_gain= 0,  # lambda_l1, lambda_l2 and min_gain_to_split to regularization
+          n_jobs=os.cpu_count(),
+          verbose= 1,
+          # class_weight=150, # because training data is extremely unbalanced. however since we used smote, its fine. combining both works almost the same as just using smote alone, according to how the calculations are done. same for xgb and catb can use there as well.)
+)
+
+lgbm.fit(X_train, Y_train.values, eval_set=[(X_train, Y_train), (X_valid, Y_valid)],
+        eval_metric='auc')
+
+preds = lgbm.predict(X_test)
+
+# feature importance
+
+tmp = pd.DataFrame({'Feature': X_train.columns.to_numpy(), 'Feature importance': lgbm.feature_importances_})
+tmp = tmp.sort_values(by='Feature importance',ascending=False)
+plt.figure(figsize = (7,4))
+plt.title('Features importance',fontsize=14)
+s = sns.barplot(x='Feature',y='Feature importance',data=tmp)
+s.set_xticklabels(s.get_xticklabels(),rotation=90)
+plt.show()   
+
+# confusion matrix
+cm = pd.crosstab(Y_test.values, preds, rownames=['Actual'], colnames=['Predicted'])
+fig, (ax1) = plt.subplots(ncols=1, figsize=(5,5))
+sns.heatmap(cm, 
+            xticklabels=['Not Fraud', 'Fraud'],
+            yticklabels=['Not Fraud', 'Fraud'],
+            annot=True,ax=ax1,
+            linewidths=.2,linecolor="Darkblue", cmap="Blues")
+plt.title('Confusion Matrix', fontsize=14)
+plt.show()
+
+# auc-roc
+
+roc_auc_score(Y_test.values, preds)
+
+# The ROC-AUC score obtained with LightGBM is 0.93.
+
+
+
+
+
+# bayesian optim for lightgbm, with kfold cv
+
+X = data_df.drop([target, 'Hour'],axis = 1)
+Y = data_df[target]
+
+X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=TEST_SIZE, stratify=Y, random_state=RANDOM_STATE, shuffle=True )
+
+lgbm = LGBMClassifier(boosting_type='dart',
+                        objective='binary',
+                        metric='auc',
+                        n_jobs=os.cpu_count(), 
+                        verbose=-1,
+                        random_state=RANDOM_STATE,
+                        min_split_gain= 0, # or can regularize next step by searching L1/L2 
+                        )
+
+search_spaces = {
+    'learning_rate': Real(0.001, 0.01, 'log-uniform'),   # Boosting learning rate
+    'n_estimators' : Integer(50, 200), # num trees to build
+    'num_leaves': Integer(10, 100),                       # Maximum tree leaves for base learners
+    'max_depth': Integer(15, 100),                       # Maximum tree depth for base learners, <=0 means no limit
+    'subsample': Real(0.1, 1.0, 'uniform'),             # Subsample ratio of the training instance
+    'subsample_freq': Integer(0, 10),                    # Frequency of subsample, <=0 means no enable
+    'min_child_samples': Integer(10, 200),  # min child sample in leaf
+    #'reg_lambda': Real(1e-9, 100.0, 'log-uniform'),      # L2 regularization
+    #'reg_alpha': Real(1e-9, 100.0, 'log-uniform'),       # L1 regularization
+   }
+
+opt = BayesSearchCV(estimator=lgbm,                                    
+                    search_spaces=search_spaces,                                              
+                    cv=5,                                          # stratifiedkfold automatically used here (refer to documentation)
+                    n_iter=30,                                        # max number of trials
+                    n_points=3,                                       # number of hyperparameter sets evaluated at the same time
+                    n_jobs=-1,                                        # number of jobs
+                    return_train_score=False,                         
+                    refit=False,                                      
+                    optimizer_kwargs={'base_estimator': 'GP'},        # optmizer parameters: we use Gaussian Process (GP)
+                    random_state=RANDOM_STATE)
+
+# Running the optimizer (let it run)
+
+np.int = np.int64 # skopt uses np.int, which was deprecated. we change it to np.int64 manually
+opt.fit(X_train, Y_train)
+
+# results
+
+best_param = opt.best_params_
+
+# OrderedDict([('learning_rate', 0.008334804024808152),
+#             ('max_depth', 24),
+#             ('min_child_samples', 18),
+#             ('n_estimators', 188),
+#             ('num_leaves', 58),
+#             ('subsample', 0.9953948691683815),
+#             ('subsample_freq', 2)])
+
+opt.best_scores_
+
+# best score with auc of 0.9994118808839343
+
+# apply on test set
+
+lgbm = LGBMClassifier(boosting_type='dart',
+                        objective='binary',
+                        metric='auc',
+                        n_jobs=os.cpu_count(), 
+                        verbose=-1,
+                        random_state=RANDOM_STATE,
+                        min_split_gain= 0, # or can regularize next step by searching L1/L2 
+                        learning_rate=best_param['learning_rate'],
+                        max_depth=best_param['max_depth'],
+                        min_child_samples=best_param['min_child_samples'],
+                        n_estimators=best_param['n_estimators'],
+                        num_leaves=best_param['num_leaves'],
+                        subsample=best_param['subsample'],
+                        subsample_freq=best_param['subsample_freq'],
+                        )
+
+lgbm.fit(X_train, Y_train.values)
+
+preds = lgbm.predict(X_test)
+
+# feature importance
+
+tmp = pd.DataFrame({'Feature': X_train.columns.to_numpy(), 'Feature importance': lgbm.feature_importances_})
+tmp = tmp.sort_values(by='Feature importance',ascending=False)
+plt.figure(figsize = (7,4))
+plt.title('Features importance',fontsize=14)
+s = sns.barplot(x='Feature',y='Feature importance',data=tmp)
+s.set_xticklabels(s.get_xticklabels(),rotation=90)
+plt.show()   
+
+# confusion matrix
+cm = pd.crosstab(Y_test.values, preds, rownames=['Actual'], colnames=['Predicted'])
+fig, (ax1) = plt.subplots(ncols=1, figsize=(5,5))
+sns.heatmap(cm, 
+            xticklabels=['Not Fraud', 'Fraud'],
+            yticklabels=['Not Fraud', 'Fraud'],
+            annot=True,ax=ax1,
+            linewidths=.2,linecolor="Darkblue", cmap="Blues")
+plt.title('Confusion Matrix', fontsize=14)
+plt.show()
+
+# auc-roc
+
+roc_auc_score(Y_test.values, preds)
+
+# The ROC-AUC score obtained with hyperparam tuned LightGBM is 0.85.
+
+# even with hyperparametertuning, it perform worse compared
+# to our previous model without tuning.
+# this shows that the highly imbalance nature of our dataset
+# can skew results drastically, and stratified kfold is
+# not enough to address the imbalance nature
+# it is better to use ADASYN() to oversample our Fraud Cases
+# on the training data prior to training the model.
