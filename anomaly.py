@@ -91,7 +91,7 @@ OPT_ROUNDS = 1000  #To be adjusted based on best validation rounds
 VERBOSE_EVAL = 50 #Print out metric result
 
 
-data_df = pd.read_csv("C://Users//wlim129//Desktop//Work//Anomaly Detection//creditcard.csv")
+data_df = pd.read_csv("C://Users//wl//Desktop//Work//Website//Fraud//creditcard.csv")
 
 print(data_df.shape)
 # data has rows: 284807  columns: 31
@@ -618,7 +618,7 @@ plt.show()
 
 roc_auc_score(Y_test.values, preds)
 
-# The AUC score for the prediction of fresh data (test set) for xgboost is 0.92.
+# The AUC score for the prediction of fresh data (test set) for xgboost is 0.91.
 
 
 # LightGBM
@@ -680,10 +680,6 @@ roc_auc_score(Y_test.values, preds)
 
 # bayesian optim for lightgbm, with kfold cv
 
-X = data_df.drop([target, 'Hour'],axis = 1)
-Y = data_df[target]
-
-X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=TEST_SIZE, stratify=Y, random_state=RANDOM_STATE, shuffle=True )
 
 lgbm = LGBMClassifier(boosting_type='dart',
                         objective='binary',
@@ -706,16 +702,24 @@ search_spaces = {
     #'reg_alpha': Real(1e-9, 100.0, 'log-uniform'),       # L1 regularization
    }
 
+fit_params = {
+    'early_stopping_rounds':10,
+    'eval_metric':'auc',
+    'eval_set':[(X_train, Y_train), (X_valid, Y_valid)],
+}
+
 opt = BayesSearchCV(estimator=lgbm,                                    
                     search_spaces=search_spaces,                                              
                     cv=5,                                          # stratifiedkfold automatically used here (refer to documentation)
                     n_iter=30,                                        # max number of trials
-                    n_points=3,                                       # number of hyperparameter sets evaluated at the same time
+                    n_points=6,                                       # number of hyperparameter sets evaluated at the same time
                     n_jobs=-1,                                        # number of jobs
                     return_train_score=False,                         
                     refit=False,                                      
                     optimizer_kwargs={'base_estimator': 'GP'},        # optmizer parameters: we use Gaussian Process (GP)
-                    random_state=RANDOM_STATE)
+                    random_state=RANDOM_STATE,
+                    verbose=1,
+                    fit_params=fit_params,)
 
 # Running the optimizer (let it run)
 
@@ -725,18 +729,15 @@ opt.fit(X_train, Y_train)
 # results
 
 best_param = opt.best_params_
+best_param
 
-# OrderedDict([('learning_rate', 0.008334804024808152),
-#             ('max_depth', 24),
-#             ('min_child_samples', 18),
-#             ('n_estimators', 188),
-#             ('num_leaves', 58),
-#             ('subsample', 0.9953948691683815),
-#             ('subsample_freq', 2)])
-
-opt.best_scores_
-
-# best score with auc of 0.9994118808839343
+#OrderedDict([('learning_rate', 0.01),
+#             ('max_depth', 100),
+#             ('min_child_samples', 10),
+#             ('n_estimators', 200),
+#             ('num_leaves', 100),
+#             ('subsample', 0.1),
+#             ('subsample_freq', 10)])
 
 # apply on test set
 
@@ -785,7 +786,7 @@ plt.show()
 
 roc_auc_score(Y_test.values, preds)
 
-# The ROC-AUC score obtained with hyperparam tuned LightGBM is 0.85.
+# The ROC-AUC score obtained with hyperparam tuned LightGBM is 0.91.
 
 # even with hyperparametertuning, it perform worse compared
 # to our previous model without tuning.
@@ -794,3 +795,4 @@ roc_auc_score(Y_test.values, preds)
 # not enough to address the imbalance nature
 # it is better to use ADASYN() to oversample our Fraud Cases
 # on the training data prior to training the model.
+
