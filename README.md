@@ -1,4 +1,4 @@
-Exhuastive Framework for Risk Management and Anomaly Detection in Highly Imbalanced Datasets
+Exhaustive Framework for Risk Management and Anomaly Detection in Highly Imbalanced Datasets
 ================
 
 [Link to full Jupyter Notebook](https://github.com/wenlong96/risk_fraud_anomaly/blob/main/risk_fraud_anomaly.ipynb)
